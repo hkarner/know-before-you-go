@@ -1,0 +1,21 @@
+name: Daily grade alert check
+
+on:
+  schedule:
+    - cron: '0 9 * * *'  # 9am UTC daily (2am PT)
+  workflow_dispatch:       # allows manual trigger from GitHub UI
+
+jobs:
+  check-alerts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - run: pip install supabase sendgrid numpy pandas dataretrieval
+      - run: python alert_check.py
+        env:
+          SENDGRID_API_KEY: $ secrets.SENDGRID_API_KEY 
+          SUPABASE_URL: $ secrets.SUPABASE_URL 
+          SUPABASE_KEY: $ secrets.SUPABASE_KEY 
