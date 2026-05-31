@@ -1,0 +1,11 @@
+streamlit
+streamlit-geolocation
+streamlit-folium
+folium
+plotly
+rapidfuzz
+supabase
+resend
+requests
+numpy
+pandas
