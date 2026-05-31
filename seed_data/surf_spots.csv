@@ -1,12 +1,30 @@
-beacon_id,alias,slug,surfline_id
-Zuma Beach,Zuma Beach,zuma-beach,
-Zuma Beach,Zuma,zuma,
-Malibu,Malibu Surfrider,malibu-surfrider,5842041f4e65fad6a7788898
-Malibu,Malibu,malibu,
-Malibu,Surfrider,surfrider,
-Venice Beach,Venice Beach,venice-beach,
-Venice Beach,Venice,venice,
-Santa Monica,Santa Monica Beach,santa-monica-beach,
-Santa Monica,Santa Monica,santa-monica,
-Hermosa Beach,Hermosa Beach,hermosa-beach,
-Hermosa Beach,Hermosa,hermosa,
+alias,slug,beacon_id,surfline_id,state
+Seal Beach,seal-beach,OSB01,,CA
+Sunset Beach,sunset-beach,OSUB1,,CA
+Bolsa Chica,bolsa-chica,39N,,CA
+Huntington Beach,huntington-beach,27N,,CA
+Huntington Beach Pier,huntington-beach-pier,0,,CA
+Huntington State Beach,huntington-state-beach,9N,,CA
+Newport Beach,newport-beach,15S,,CA
+Crystal Cove,crystal-cove,39S,,CA
+Laguna Beach,laguna-beach,MAINBCU,,CA
+Aliso Beach,aliso-beach,S9,,CA
+Salt Creek,salt-creek,OSL25,,CA
+Doheny,doheny,S-0,,CA
+San Clemente Pier,san-clemente-pier,PIERz,,CA
+San Clemente State,san-clemente-state,S-21,,CA
+Trestles,trestles,EH-520,,CA
+Oceanside Harbor,oceanside-harbor,OC-100,,CA
+Oceanside Pier,oceanside-pier,OC-080,,CA
+Carlsbad,carlsbad,EH-460,,CA
+South Carlsbad,south-carlsbad,EN-040,,CA
+Moonlight Beach,moonlight-beach,EH-420,,CA
+Swamis,swamis,EH-410,,CA
+Cardiff,cardiff,SE-060,,CA
+San Elijo,san-elijo,SE-070,,CA
+Solana Beach,solana-beach,SB_Seascape Sur,,CA
+Natural Bridges,natural-bridges,O530,,CA
+Mitchells Cove,mitchells-cove,O520,,CA
+Cowells,cowells,Cowell,,CA
+Santa Cruz Main Beach,santa-cruz-main,Main,,CA
+Seabright,seabright,O440,,CA
