@@ -5,12 +5,72 @@ from streamlit_geolocation import streamlit_geolocation
 import requests
 import math
 import json
+import os
+import csv
 import plotly.express as px
 import pandas as pd
 import sqlite3
 from supabase import create_client
 from grades import calculate_grade, GRADE_ORDER
 from search import search_beaches
+
+# ---------------------------------------------------------------------------
+# DB init: create tables and seed aliases on first run (Streamlit Cloud has no DB)
+# ---------------------------------------------------------------------------
+def _init_db():
+    os.makedirs("data", exist_ok=True)
+    conn = sqlite3.connect("data/beaches.db")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS samples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            beach_id TEXT NOT NULL,
+            sample_date TEXT NOT NULL,
+            entero_cfu REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS beaches (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            state TEXT,
+            latitude REAL,
+            longitude REAL
+        );
+        CREATE TABLE IF NOT EXISTS beach_aliases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            alias TEXT NOT NULL,
+            beach_id TEXT NOT NULL,
+            slug TEXT,
+            surfline_id TEXT,
+            state TEXT
+        );
+        CREATE TABLE IF NOT EXISTS grade_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            beach_id TEXT NOT NULL,
+            grade_date TEXT NOT NULL,
+            grade TEXT,
+            geo_mean REAL
+        );
+    """)
+    # Seed beach_aliases from CSV if empty
+    count = conn.execute("SELECT COUNT(*) FROM beach_aliases").fetchone()[0]
+    if count == 0:
+        csv_path = "seed_data/surf_spots.csv"
+        if os.path.exists(csv_path):
+            with open(csv_path, newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO beach_aliases (alias, beach_id, slug, surfline_id, state) VALUES (?,?,?,?,?)",
+                        (row["alias"], row["beacon_id"], row["slug"], row.get("surfline_id", ""), row.get("state", ""))
+                    )
+                    # Also upsert into beaches table so search works
+                    conn.execute(
+                        "INSERT OR IGNORE INTO beaches (id, name, state) VALUES (?,?,?)",
+                        (row["beacon_id"], row["alias"], row.get("state", ""))
+                    )
+            conn.commit()
+    conn.close()
+
+_init_db()
 
 # ---------------------------------------------------------------------------
 # SEO: dynamic page title based on query param (must be first st call)
