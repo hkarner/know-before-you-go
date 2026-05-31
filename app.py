@@ -4,16 +4,35 @@ from streamlit_folium import st_folium
 from streamlit_geolocation import streamlit_geolocation
 import requests
 import math
+import json
 import plotly.express as px
 import pandas as pd
 import sqlite3
+from supabase import create_client
 from grades import calculate_grade, GRADE_ORDER
 from search import search_beaches
 
+# ---------------------------------------------------------------------------
+# SEO: dynamic page title based on query param (must be first st call)
+# ---------------------------------------------------------------------------
+_beach_param = st.query_params.get("beach", None)
+_page_title = (
+    f"{_beach_param.replace('-', ' ').title()} Water Quality Grade | Know Before You Go"
+    if _beach_param
+    else "Know Before You Go"
+)
 st.set_page_config(
-    page_title="Know Before You Go",
+    page_title=_page_title,
     page_icon="🌊",
     layout="wide"
+)
+
+# ---------------------------------------------------------------------------
+# Supabase client (reads secrets from Streamlit Cloud or local secrets.toml)
+# ---------------------------------------------------------------------------
+supabase = create_client(
+    st.secrets["SUPABASE_URL"],
+    st.secrets["SUPABASE_KEY"]
 )
 
 # ---------------------------------------------------------------------------
@@ -23,8 +42,52 @@ GRADE_COLOR = {"A": "#2ec4b6", "B": "#57cc99", "C": "#f4a261", "D": "#e76f51", "
 GRADE_LABEL = {"A": "Safe", "B": "Good", "C": "Caution", "D": "Poor", "F": "Advisory / Closed"}
 
 # ---------------------------------------------------------------------------
-# Helper functions (all defined before use)
+# Helper functions
 # ---------------------------------------------------------------------------
+def inject_jsonld(beach_name: str, slug: str, sample_date: str):
+    """Inject JSON-LD structured data for GEO / AI search visibility."""
+    schema = {
+        "@context": "https://schema.org",
+        "@type": "Dataset",
+        "name": f"{beach_name} Water Quality Grade",
+        "description": (
+            f"Weekly water quality grade for {beach_name} based on "
+            "EPA BEACON and USGS monitoring data."
+        ),
+        "url": f"https://hkarner-know-before-you-go.streamlit.app/?beach={slug}",
+        "variableMeasured": "Enterococcus bacteria (CFU/100mL)",
+        "measurementTechnique": "EPA BEACH Act monitoring, geometric mean of last 5 samples",
+        "dateModified": sample_date,
+        "publisher": {"@type": "Organization", "name": "Know Before You Go"}
+    }
+    st.markdown(
+        f'<script type="application/ld+json">{json.dumps(schema)}</script>',
+        unsafe_allow_html=True
+    )
+
+
+def alert_preferences_form(beach_id: str, beach_name: str):
+    """Let users subscribe to grade-change email alerts for a beach."""
+    with st.expander("🔔 Get email alerts for this beach"):
+        email = st.text_input("Your email", key=f"email_{beach_id}")
+        threshold = st.selectbox(
+            "Alert me when grade is:",
+            ["any change", "C or worse", "D or worse", "F only"],
+            key=f"thresh_{beach_id}"
+        )
+        if st.button("Subscribe", key=f"sub_{beach_id}"):
+            if email:
+                supabase.table("alert_subscriptions").upsert({
+                    "email": email,
+                    "beach_id": beach_id,
+                    "beach_name": beach_name,
+                    "threshold": threshold,
+                }).execute()
+                st.success(f"Subscribed! You'll get alerts for {beach_name}.")
+            else:
+                st.warning("Please enter your email.")
+
+
 def display_grade_card(beach_id: str, display_name: str):
     result = calculate_grade(beach_id)
     grade = result["grade"] or "?"
@@ -37,6 +100,7 @@ def display_grade_card(beach_id: str, display_name: str):
         <p style='font-size:18px; margin:4px 0;'>{label} — Last sampled {sample_date}</p>
     </div>
     """, unsafe_allow_html=True)
+    return result.get("sample_date", "")
 
 
 def get_swell_data(lat: float, lon: float) -> dict:
@@ -140,13 +204,22 @@ location = streamlit_geolocation()
 if query:
     results = search_beaches(query)
     if results:
-        options = {r["display"]: r["beach_id"] for r in results}
+        options = {r["display"]: r for r in results}
         selected_name = st.selectbox("Select a beach:", list(options.keys()))
-        selected_beach_id = options[selected_name]
+        selected = options[selected_name]
+        selected_beach_id = selected["beach_id"]
+        selected_slug = selected.get("slug", selected_beach_id)
+        selected_state = selected.get("state", "")
 
-        # Grade card
+        # Grade card (returns sample_date for JSON-LD)
         st.markdown(f"## {selected_name}")
-        display_grade_card(selected_beach_id, selected_name)
+        sample_date = display_grade_card(selected_beach_id, selected_name)
+
+        # GEO: inject JSON-LD structured data
+        inject_jsonld(selected_name, selected_slug, sample_date or "")
+
+        # Alert preferences
+        alert_preferences_form(selected_beach_id, selected_name)
 
         # History chart
         st.divider()
