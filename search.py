@@ -17,5 +17,5 @@ def search_beaches(query: str, limit: int = 5) -> list:
     ]
 
     names = [e["display"] for e in all_entries]
-    matches = process.extract(query, names, limit=limit, score_cutoff=55)
+    matches = process.extract(query, names, limit=limit, score_cutoff=75)
     return [{"display": m[0], "beach_id": all_entries[names.index(m[0])]["beach_id"], "score": m[1]} for m in matches]
