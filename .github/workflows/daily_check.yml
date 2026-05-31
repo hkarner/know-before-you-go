@@ -1,21 +1,26 @@
-name: Daily grade alert check
+name: Weekly beach grade fetch + alert check
 
 on:
   schedule:
-    - cron: '0 9 * * *'  # 9am UTC daily (2am PT)
+    - cron: '0 9 * * 1'  # 9am UTC every Monday (2am PT)
   workflow_dispatch:       # allows manual trigger from GitHub UI
 
 jobs:
-  check-alerts:
+  fetch-and-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      - run: pip install supabase sendgrid numpy pandas dataretrieval
+      - run: pip install supabase resend numpy pandas requests
+
+      # Step 1: Fetch latest CEDEN data into the database
+      - run: python fetch.py
+
+      # Step 2: Check grades and send alert emails if anything changed
       - run: python alert_check.py
         env:
-          SENDGRID_API_KEY: $ secrets.SENDGRID_API_KEY 
+          RESEND_API_KEY: $ secrets.RESEND_API_KEY 
           SUPABASE_URL: $ secrets.SUPABASE_URL 
           SUPABASE_KEY: $ secrets.SUPABASE_KEY 

@@ -1,109 +1,139 @@
 import sqlite3
 import requests
-import pandas as pd
-from io import StringIO
-from datetime import date, timedelta
+from datetime import date
 
 DB_PATH = "data/beaches.db"
-START_DATE = (date.today() - timedelta(days=5*365)).isoformat()
-END_DATE = date.today().isoformat()
-WQP = "https://www.waterqualitydata.us/data"
 
-BEACH_COORDS = {
-    "Zuma":         (34.0177, -118.8226, 5),
-    "Venice":       (33.9850, -118.4695, 3),
-    "Santa Monica": (34.0050, -118.4959, 3),
-    "Malibu":       (34.0366, -118.6922, 5),
-    "Hermosa":      (33.8622, -118.3995, 3),
-    "Redondo":      (33.8447, -118.3951, 3),
-    "Huntington":   (33.6595, -118.0000, 5),
-    "Newport":      (33.6103, -117.9281, 5),
-    "Laguna":       (33.5427, -117.7854, 5),
-    "Doheny":       (33.4613, -117.6811, 3),
-}
+# CEDEN CA Open Data Portal — Surface Water Chemistry Results
+# Resource IDs by year (add older years here for more history)
+CEDEN_RESOURCES = [
+    "7c2faf29-d5d3-4ad6-a429-442ed337febb",  # 2026
+    "97b8bb60-8e58-4c97-a07f-d51a48cd36d4",  # 2025
+]
+CKAN_API = "https://data.ca.gov/api/3/action/datastore_search"
+PAGE_SIZE = 1000  # records per API call
 
-def find_stations(beach_name: str, lat: float, lon: float, radius_miles: float) -> list:
-    """Step 1: find WQP monitoring station IDs near a beach via Station/search."""
+
+def fetch_enterococcus_page(resource_id: str, offset: int) -> dict:
+    """Fetch one page of Enterococcus records from a CEDEN resource."""
     params = {
-        "characteristicName": "Enterococcus",
-        "within": str(radius_miles),
-        "lat": str(lat),
-        "long": str(lon),  # NOTE: WQP uses 'long', not 'lon'
-        "mimeType": "csv",
-        "zip": "no",
-        "providers": ["NWIS", "STORET"],
+        "resource_id": resource_id,
+        "filters": '{"Analyte": "Enterococcus"}',
+        "limit": PAGE_SIZE,
+        "offset": offset,
     }
-    resp = requests.get(f"{WQP}/Station/search", params=params, timeout=30)
-    if resp.status_code != 200:
-        print(f"  Station search failed {resp.status_code}: {resp.text[:200]}")
-        return []
-    df = pd.read_csv(StringIO(resp.text), low_memory=False)
-    if df.empty:
-        return []
-    site_ids = df["MonitoringLocationIdentifier"].dropna().tolist()
-    print(f"  Found {len(site_ids)} monitoring stations near {beach_name}")
-    return site_ids
+    resp = requests.get(CKAN_API, params=params, timeout=60)
+    resp.raise_for_status()
+    return resp.json()["result"]
 
-def fetch_results(site_ids: list, beach_name: str) -> list:
-    """Step 2: fetch Enterococcus results for specific site IDs via Result/search."""
-    if not site_ids:
-        return []
-    all_samples = []
-    batch_size = 5
-    for i in range(0, len(site_ids), batch_size):
-        batch = site_ids[i:i + batch_size]
-        params = {
-            "siteid": batch,
-            "characteristicName": "Enterococcus",
-            "startDateLo": START_DATE,
-            "startDateHi": END_DATE,
-            "mimeType": "csv",
-            "zip": "no",
-        }
-        resp = requests.get(f"{WQP}/Result/search", params=params, timeout=120)
-        if resp.status_code != 200:
-            print(f"  Batch {i//batch_size + 1} failed {resp.status_code}: {resp.text[:100]}")
+
+def fetch_all_enterococcus(resource_id: str) -> list:
+    """Page through all Enterococcus records in a single resource."""
+    records = []
+    offset = 0
+    print(f"  Fetching resource {resource_id}...")
+    while True:
+        result = fetch_enterococcus_page(resource_id, offset)
+        batch = result["records"]
+        records.extend(batch)
+        print(f"    offset={offset}, got {len(batch)} records (total so far: {len(records)})")
+        if len(batch) < PAGE_SIZE:
+            break  # last page
+        offset += PAGE_SIZE
+    print(f"  Done: {len(records)} total Enterococcus records")
+    return records
+
+
+def parse_records(records: list) -> tuple:
+    """
+    Parse raw CEDEN records into samples and stations dicts.
+    Returns:
+        samples: list of dicts for the `samples` table
+        stations: dict of StationCode -> station info for the `beaches` table
+    """
+    samples = []
+    stations = {}  # StationCode -> {name, lat, lon}
+
+    for row in records:
+        station_code = row.get("StationCode", "").strip()
+        station_name = row.get("StationName", "").strip()
+        sample_date_raw = row.get("SampleDate", "")
+        result = row.get("Result")
+        qual_code = row.get("ResultQualCode", "").strip()
+        lat = row.get("Latitude")
+        lon = row.get("Longitude")
+
+        # Skip if missing key fields
+        if not station_code or result is None:
             continue
-        df = pd.read_csv(StringIO(resp.text), low_memory=False)
-        print(f"  Batch {i//batch_size + 1}: {len(df)} rows")
-        for _, row in df.iterrows():
+
+        # Only accept actual quantified results ("=" means result is the measured value)
+        # Skip non-detects ("<"), estimated values, or missing qualifiers
+        if qual_code not in ("=", ">"):
+            continue
+
+        # Parse result value
+        try:
+            cfu = float(result)
+        except (ValueError, TypeError):
+            continue
+        if cfu < 0:
+            continue
+
+        # Parse date (format: "2026-03-02T00:00:00" → "2026-03-02")
+        sample_date = str(sample_date_raw)[:10] if sample_date_raw else ""
+        if not sample_date or sample_date == "1950-01-01":  # default/unknown date
+            continue
+
+        # Collect station info (for beaches table)
+        if station_code not in stations:
             try:
-                raw = str(row.get("ResultMeasureValue", "") or "").strip().replace(",", "")
-                val = float(raw) if raw else None
+                lat_f = float(lat) if lat is not None else None
+                lon_f = float(lon) if lon is not None else None
             except (ValueError, TypeError):
-                continue
-            if val is None or val < 0:
-                continue
-            all_samples.append({
-                "beach_id": str(row.get("MonitoringLocationIdentifier", beach_name))[:100],
-                "sample_date": str(row.get("ActivityStartDate", ""))[:10],
-                "entero_cfu": val,
-                "source": "WQP",
-            })
-    print(f"  Got {len(all_samples)} total samples for {beach_name}")
-    return all_samples
+                lat_f = lon_f = None
+            stations[station_code] = {
+                "id": station_code,
+                "name": station_name or station_code,
+                "state": "CA",
+                "lat": lat_f,
+                "lon": lon_f,
+            }
 
-def fetch_wqp(beach_name: str) -> list:
-    """Fetch Enterococcus samples for a named beach — two-step: stations then results."""
-    coords = next(
-        ((lat, lon, r) for key, (lat, lon, r) in BEACH_COORDS.items()
-         if key.lower() in beach_name.lower() or beach_name.lower() in key.lower()),
-        None
+        samples.append({
+            "beach_id": station_code,
+            "sample_date": sample_date,
+            "entero_cfu": cfu,
+            "source": "CEDEN",
+        })
+
+    return samples, stations
+
+
+def upsert_stations(stations: dict):
+    """Insert or update station records in the beaches table."""
+    if not stations:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    # Update lat/lon if we have them, but don't overwrite name with blank
+    conn.executemany(
+        """
+        INSERT INTO beaches (id, name, state, lat, lon)
+        VALUES (:id, :name, :state, :lat, :lon)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            lat  = COALESCE(excluded.lat, beaches.lat),
+            lon  = COALESCE(excluded.lon, beaches.lon)
+        """,
+        stations.values(),
     )
-    if not coords:
-        print(f"  No coordinates found for '{beach_name}'.")
-        print(f"  Available: {list(BEACH_COORDS.keys())}")
-        return []
+    conn.commit()
+    conn.close()
+    print(f"  Upserted {len(stations)} stations into beaches table.")
 
-    lat, lon, radius = coords
-    print(f"  Looking up stations near ({lat}, {lon}), radius={radius}mi...")
-    site_ids = find_stations(beach_name, lat, lon, radius)
-    if not site_ids:
-        print(f"  No monitoring stations found near {beach_name}.")
-        return []
-    return fetch_results(site_ids, beach_name)
 
 def store_samples(samples: list):
+    """Insert new samples; skip duplicates (beach_id + sample_date + entero_cfu)."""
     if not samples:
         print("  No samples to store.")
         return
@@ -111,16 +141,35 @@ def store_samples(samples: list):
     conn.executemany(
         "INSERT OR IGNORE INTO samples (beach_id, sample_date, entero_cfu, source) "
         "VALUES (:beach_id, :sample_date, :entero_cfu, :source)",
-        samples
+        samples,
     )
     conn.commit()
+    inserted = conn.execute("SELECT COUNT(*) FROM samples WHERE source = 'CEDEN'").fetchone()[0]
     conn.close()
-    print(f"  Stored {len(samples)} samples.")
+    print(f"  Stored {len(samples)} samples (total CEDEN rows in DB: {inserted}).")
+
+
+def run_fetch():
+    """Main entry point: fetch all CEDEN Enterococcus data and load into SQLite."""
+    today = date.today().isoformat()
+    print(f"CEDEN fetch started: {today}")
+    print(f"Resources to fetch: {len(CEDEN_RESOURCES)}")
+
+    all_samples = []
+    all_stations = {}
+
+    for resource_id in CEDEN_RESOURCES:
+        records = fetch_all_enterococcus(resource_id)
+        samples, stations = parse_records(records)
+        all_samples.extend(samples)
+        all_stations.update(stations)  # later years overwrite earlier (fresher coords)
+        print(f"  Parsed: {len(samples)} valid samples, {len(stations)} unique stations")
+
+    print(f"\nTotal across all resources: {len(all_samples)} samples, {len(all_stations)} stations")
+    upsert_stations(all_stations)
+    store_samples(all_samples)
+    print("\nFetch complete.")
+
 
 if __name__ == "__main__":
-    beach_name = "Zuma"
-    print(f"Fetching samples for {beach_name}...")
-    samples = fetch_wqp(beach_name)
-    print(f"Fetched {len(samples)} samples")
-    store_samples(samples)
-    print("Done.")
+    run_fetch()
